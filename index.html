@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Field Day</title>
+<meta name="description" content="Friendly species-spotting leagues with your friends, scored live from iNaturalist.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: one column field-card stack — league header, standings, then a per-player species ledger. */
+:root{
+  --bg:#eef2ec; --surface:#ffffff; --ink:#15261c; --muted:#5b6b60; --line:#d3ddd4;
+  --forest:#1f5b3a; --forest-soft:#e1ece4; --gold:#e8b416; --gold-ink:#5a4300; --danger:#b23a2b;
+  --display:"Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --body:"Inter", system-ui, -apple-system, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1712; --surface:#17221b; --ink:#e4ede6; --muted:#9aab9f; --line:#2b3a30;
+  --forest:#6fc293; --forest-soft:#1d3226; --gold:#f2c94c; --gold-ink:#f2c94c; --danger:#ff8a78; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1712; --surface:#17221b; --ink:#e4ede6; --muted:#9aab9f; --line:#2b3a30;
+  --forest:#6fc293; --forest-soft:#1d3226; --gold:#f2c94c; --gold-ink:#f2c94c; --danger:#ff8a78; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--body);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:calc(env(safe-area-inset-top,0px) + 20px) calc(env(safe-area-inset-bottom,0px) + 40px)}
+.wrap{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+h1,h2,h3{font-family:var(--display);margin:0;text-wrap:balance;line-height:1.1}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.brand{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.brand .logo{font-family:var(--display);font-weight:800;font-size:18px;letter-spacing:.01em;white-space:nowrap;display:flex;align-items:center;gap:8px}
+.brand .logo svg{width:22px;height:22px}
+.btn{white-space:nowrap;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:8px 14px;font-weight:600;font-size:14px}
+.btn.primary{background:var(--forest);border-color:var(--forest);color:var(--bg)}
+.btn:disabled{opacity:.5;cursor:default}
+.hero{display:flex;flex-direction:column;gap:6px;padding:4px 0}
+.eyebrow{font:600 12px/1 var(--body);text-transform:uppercase;letter-spacing:.09em;color:var(--forest)}
+.hero h1{font-size:clamp(30px,6vw,44px);font-weight:800}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.chip{background:var(--forest-soft);color:var(--forest);border-radius:999px;padding:4px 10px;font-size:13px;font-weight:600}
+.chip.gold{background:color-mix(in srgb,var(--gold) 22%,transparent);color:var(--gold-ink)}
+.notice{border:1px dashed var(--line);border-radius:12px;padding:10px 14px;color:var(--muted);font-size:14px}
+.notice b{color:var(--ink)}
+.board{display:flex;flex-direction:column;gap:10px}
+.row{display:grid;grid-template-columns:36px 44px 1fr auto;align-items:center;gap:12px;background:var(--surface);
+  border:1px solid var(--line);border-radius:14px;padding:12px 14px;text-align:left;width:100%}
+.row.sel{border-color:var(--forest);box-shadow:0 0 0 1px var(--forest)}
+.rank{font:700 20px/1 var(--mono);color:var(--muted);text-align:center}
+.row.first .rank{color:var(--gold-ink)}
+.avatar{width:44px;height:44px;border-radius:50%;background:var(--forest-soft);object-fit:cover;display:grid;place-items:center;
+  font-weight:700;color:var(--forest);overflow:hidden}
+.who{min-width:0}
+.who .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who .sub{color:var(--muted);font-size:13px}
+.bar{height:6px;border-radius:3px;background:var(--forest-soft);margin-top:6px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--forest);border-radius:3px}
+.row.first .bar i{background:var(--gold)}
+.score{text-align:right}
+.score b{font:700 26px/1 var(--mono);font-variant-numeric:tabular-nums}
+.score span{display:block;color:var(--muted);font-size:12px}
+.err{color:var(--danger);font-size:13px}
+.ledger{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.ledger header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tab{border:1px solid var(--line);background:transparent;border-radius:999px;padding:4px 12px;font-size:13px;font-weight:600}
+.tab[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.species{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.sp{display:flex;gap:10px;align-items:center;min-width:0;border:1px solid var(--line);border-radius:10px;padding:6px}
+.sp img,.sp .ph{width:46px;height:46px;border-radius:7px;object-fit:cover;flex:none;background:var(--forest-soft)}
+.sp .t{min-width:0;font-size:13px;line-height:1.3}
+.sp .t b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp .t i{color:var(--muted);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pts{font:700 11px/1 var(--mono);color:var(--muted)}
+.only{font:700 10px/1 var(--body);text-transform:uppercase;letter-spacing:.06em;color:var(--gold-ink);
+  background:color-mix(in srgb,var(--gold) 22%,transparent);border-radius:4px;padding:2px 5px;margin-left:4px;white-space:nowrap;display:inline-block}
+.empty{color:var(--muted);font-size:14px;padding:8px 0}
+/* setup drawer */
+dialog{border:none;border-radius:18px;padding:0;background:var(--surface);color:var(--ink);width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 32px)}
+dialog::backdrop{background:rgba(10,20,14,.5)}
+form.setup{padding:20px;display:flex;flex-direction:column;gap:14px}
+label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;color:var(--muted)}
+input,select{border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:var(--bg);font-weight:500}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.check{flex-direction:row;align-items:center;gap:8px;color:var(--ink);font-weight:500}
+.hint{font-weight:400;font-size:12px;color:var(--muted)}
+.actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 20px);background:var(--ink);color:var(--bg);
+  padding:10px 16px;border-radius:999px;font-weight:600;font-size:14px}
+.formats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.fmt{border:1px solid var(--line);border-radius:12px;padding:10px;display:flex;gap:8px;align-items:flex-start;color:var(--ink);font-weight:500;flex-direction:row}
+.fmt input{margin-top:3px}
+.fmt small{display:block;color:var(--muted);font-weight:400}
+.fmt:has(input:checked){border-color:var(--forest);background:var(--forest-soft)}
+footer{color:var(--muted);font-size:12px;text-align:center}
+footer a{color:inherit}
+@media (max-width:480px){.brand .btn{padding:7px 11px;font-size:13px}.species{grid-template-columns:1fr}.two,.formats{grid-template-columns:1fr}.row{grid-template-columns:28px 38px 1fr auto;gap:10px}.avatar{width:38px;height:38px}}
+@media (prefers-reduced-motion:no-preference){.bar i{transition:width .6s ease}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">
+    <div class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 7h.01"/><path d="M3.4 18H12a8 8 0 0 0 8-8V7a4 4 0 0 0-7.28-2.3L2 20"/><path d="m20 7 2 .5-2 .5"/><path d="M10 18v3"/><path d="M14 17.75V21"/><path d="M7 18a6 6 0 0 0 3.84-10.61"/></svg>Field Day</div>
+    <div style="display:flex;gap:8px">
+      <button class="btn" id="editBtn" type="button">Edit league</button>
+      <button class="btn primary" id="shareBtn" type="button">Copy invite link</button>
+    </div>
+  </div>
+
+  <section class="hero">
+    <div class="eyebrow" id="fmtLabel">Season race</div>
+    <h1 id="leagueName">League</h1>
+    <div class="meta" id="meta"></div>
+  </section>
+
+  <div class="notice" id="notice" hidden></div>
+
+  <section class="board" id="board" aria-live="polite"></section>
+
+  <section class="ledger" id="ledger" hidden>
+    <header>
+      <h2 id="ledgerTitle" style="font-size:20px">Species</h2>
+      <div class="tabs" id="ledgerTabs">
+        <button class="tab" type="button" data-f="all" aria-pressed="true">All</button>
+        <button class="tab" type="button" data-f="only" aria-pressed="false">Only them</button>
+      </div>
+    </header>
+    <div class="species" id="species"></div>
+  </section>
+
+  <footer>Data from <a href="https://www.inaturalist.org" target="_blank" rel="noopener">iNaturalist</a> (public, verifiable observations). Updated <span id="updated">—</span> · <button class="btn" id="refreshBtn" type="button" style="padding:2px 10px;font-size:12px">Refresh</button></footer>
+</div>
+
+<dialog id="dlg">
+  <form class="setup" id="setup" method="dialog">
+    <h2 style="font-size:22px">League setup</h2>
+    <label for="f-name">League name<input id="f-name" name="name" maxlength="60" required></label>
+    <label for="f-users">iNaturalist usernames <span class="hint">Comma-separated. Each friend's username is in their profile URL.</span>
+      <input id="f-users" name="users" placeholder="brendan, sarah_birds, mike123" required></label>
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:6px">Format</div>
+      <div class="formats">
+        <label class="fmt"><input type="radio" name="fmt" value="race" checked><span>Season race<small>Most species in the date range</small></span></label>
+        <label class="fmt"><input type="radio" name="fmt" value="bigday"><span>Big Day<small>Most species on one date</small></span></label>
+        <label class="fmt"><input type="radio" name="fmt" value="rarity"><span>Rarity points<small>Rarer species score more</small></span></label>
+        <label class="fmt"><input type="radio" name="fmt" value="unique"><span>Only-you finds<small>Species nobody else got</small></span></label>
+      </div>
+    </div>
+    <label for="f-taxon">What counts
+      <select id="f-taxon" name="taxon">
+        <option value="3">Birds</option><option value="47126">Plants</option><option value="47170">Fungi</option>
+        <option value="47158">Insects</option><option value="40151">Mammals</option><option value="20978">Amphibians</option>
+        <option value="26036">Reptiles</option><option value="47178">Ray-finned fishes</option><option value="47119">Arachnids</option>
+        <option value="">All life</option>
+      </select></label>
+    <div class="two">
+      <label for="f-d1"><span id="d1Label">Start date</span><input id="f-d1" name="d1" type="date" required></label>
+      <label for="f-d2" id="d2Wrap">End date<input id="f-d2" name="d2" type="date"></label>
+    </div>
+    <label class="check" for="f-rg"><input id="f-rg" name="rg" type="checkbox"> Research-grade only <span class="hint">(confirmed IDs; stricter)</span></label>
+    <div class="actions">
+      <button class="btn" value="cancel" formnovalidate type="submit">Cancel</button>
+      <button class="btn primary" value="save" type="submit">Save league</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+(() => {
+  const API = "https://api.inaturalist.org/v1";
+  const TAXA = {"3":"Birds","47126":"Plants","47170":"Fungi","47158":"Insects","40151":"Mammals","20978":"Amphibians","26036":"Reptiles","47178":"Ray-finned fishes","47119":"Arachnids","":"All life"};
+  const FORMATS = {
+    race:{label:"Season race",unit:"species"},
+    bigday:{label:"Big Day",unit:"species"},
+    rarity:{label:"Rarity points",unit:"points"},
+    unique:{label:"Only-you finds",unit:"only-you"}
+  };
+  const $ = s => document.querySelector(s);
+  const today = new Date().toISOString().slice(0,10);
+  const yearStart = today.slice(0,4) + "-01-01";
+
+  // ---- League lives in the URL, so the link IS the league ----
+  function readLeague(){
+    const p = new URLSearchParams(location.search);
+    const users = (p.get("u")||"").split(",").map(s=>s.trim().toLowerCase()).filter(Boolean);
+    const fmt = FORMATS[p.get("f")] ? p.get("f") : "race";
+    const d1 = p.get("d1") || yearStart;
+    return {
+      name: p.get("n") || "",
+      users: [...new Set(users)].slice(0,12),
+      fmt,
+      taxon: p.has("t") ? p.get("t") : "3",
+      d1,
+      d2: fmt === "bigday" ? d1 : (p.get("d2") || today),
+      rg: p.get("rg") === "1"
+    };
+  }
+  function leagueUrl(L){
+    const p = new URLSearchParams();
+    p.set("n", L.name); p.set("u", L.users.join(",")); p.set("f", L.fmt); p.set("t", L.taxon);
+    p.set("d1", L.d1); if (L.fmt !== "bigday") p.set("d2", L.d2); if (L.rg) p.set("rg","1");
+    return location.origin + location.pathname + "?" + p.toString();
+  }
+
+  // ---- Scoring ----
+  // Rarity uses how often a species is observed on iNaturalist worldwide (a rough proxy).
+  function rarityPoints(obsCount){
+    if (obsCount == null) return 1;
+    if (obsCount < 1000) return 5;
+    if (obsCount < 10000) return 3;
+    if (obsCount < 100000) return 2;
+    return 1;
+  }
+  function score(L, players){
+    const owners = new Map(); // taxonId -> count of players who have it
+    players.forEach(pl => pl.species.forEach(s => owners.set(s.id, (owners.get(s.id)||0)+1)));
+    players.forEach(pl => {
+      pl.species.forEach(s => { s.only = players.length > 1 && owners.get(s.id) === 1; s.pts = rarityPoints(s.obs); });
+      pl.onlyCount = pl.species.filter(s=>s.only).length;
+      pl.points = pl.species.reduce((a,s)=>a+s.pts,0);
+      pl.score = L.fmt === "rarity" ? pl.points : L.fmt === "unique" ? pl.onlyCount : pl.species.length;
+    });
+    return players.slice().sort((a,b)=> (b.score-a.score) || (b.species.length-a.species.length) || a.login.localeCompare(b.login));
+  }
+  window.__fieldDay = { score, rarityPoints }; // exposed for testing
+
+  // ---- iNaturalist fetching (polite: sequential, small gap, 10-min cache) ----
+  const sleep = ms => new Promise(r=>setTimeout(r,ms));
+  async function getJSON(url){
+    const key = "fd:" + url;
+    try { const c = JSON.parse(sessionStorage.getItem(key)||"null"); if (c && Date.now()-c.t < 600000 && !forceRefresh) return c.v; } catch(e){}
+    const r = await fetch(url, {headers:{Accept:"application/json"}});
+    if (!r.ok) throw new Error("iNaturalist returned " + r.status);
+    const v = await r.json();
+    try { sessionStorage.setItem(key, JSON.stringify({t:Date.now(), v})); } catch(e){}
+    await sleep(350);
+    return v;
+  }
+  async function loadPlayer(L, login){
+    const pl = {login, name:login, icon:null, species:[], error:null};
+    try {
+      const u = await getJSON(`${API}/users/autocomplete?q=${encodeURIComponent(login)}&per_page=10`);
+      const hit = (u.results||[]).find(x => (x.login||"").toLowerCase() === login);
+      if (!hit) { pl.error = "No iNaturalist user with this username"; return pl; }
+      pl.name = hit.name || hit.login; pl.icon = hit.icon_url || hit.icon || null; pl.uid = hit.id;
+      let page = 1, total = Infinity;
+      while ((page-1)*500 < total && page <= 10) {
+        const q = new URLSearchParams({user_id:String(hit.id), d1:L.d1, d2:L.d2, per_page:"500", page:String(page)});
+        if (L.taxon) q.set("taxon_id", L.taxon);
+        if (L.rg) q.set("quality_grade","research"); else q.set("verifiable","true");
+        const d = await getJSON(`${API}/observations/species_counts?${q}`);
+        total = d.total_results || 0;
+        (d.results||[]).forEach(r => {
+          const t = r.taxon || {};
+          pl.species.push({ id:t.id, sci:t.name, common:t.preferred_common_name || t.name, obs:t.observations_count,
+            photo: t.default_photo && (t.default_photo.square_url || t.default_photo.url), n:r.count });
+        });
+        page++;
+      }
+    } catch(e){ pl.error = "Couldn't reach iNaturalist (" + e.message + ")"; }
+    return pl;
+  }
+
+  // ---- Rendering ----
+  let L = readLeague(), ranked = [], selected = null, filter = "all", forceRefresh = false;
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const fmtDate = d => new Date(d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
+
+  function renderHeader(){
+    $("#leagueName").textContent = L.name || "Untitled league";
+    $("#fmtLabel").textContent = FORMATS[L.fmt].label;
+    const dates = L.fmt === "bigday" ? fmtDate(L.d1) : `${fmtDate(L.d1)} – ${fmtDate(L.d2)}`;
+    $("#meta").innerHTML = `<span class="chip">${esc(TAXA[L.taxon] ?? "Custom taxon")}</span><span class="chip">${esc(dates)}</span>`
+      + `<span class="chip">${L.users.length} player${L.users.length===1?"":"s"}</span>` + (L.rg ? `<span class="chip gold">Research grade</span>` : "");
+    document.title = (L.name ? L.name + " · " : "") + "Field Day";
+  }
+  function renderBoard(){
+    const unit = FORMATS[L.fmt].unit, max = Math.max(1, ...ranked.map(p=>p.score));
+    let prev = null, rank = 0;
+    $("#board").innerHTML = ranked.map((p,i) => {
+      if (p.score !== prev) { rank = i+1; prev = p.score; }
+      const av = p.icon ? `<img class="avatar" src="${esc(p.icon)}" alt="">` : `<div class="avatar">${esc(p.login[0]?.toUpperCase())}</div>`;
+      const sub = p.error ? `<div class="err">${esc(p.error)}</div>` :
+        `<div class="sub">@${esc(p.login)} · ${p.species.length} species${p.onlyCount?` · ${p.onlyCount} only-you`:""}</div><div class="bar"><i style="width:${(p.score/max*100).toFixed(1)}%"></i></div>`;
+      return `<button type="button" class="row${rank===1&&p.score>0?" first":""}${selected===p.login?" sel":""}" data-login="${esc(p.login)}">
+        <div class="rank">${p.error?"–":rank}</div>${av}
+        <div class="who"><div class="name">${esc(p.name)}</div>${sub}</div>
+        <div class="score"><b>${p.error?"–":p.score}</b><span>${unit}</span></div></button>`;
+    }).join("");
+    $("#board").querySelectorAll(".row").forEach(b => b.onclick = () => { selected = b.dataset.login; renderBoard(); renderLedger(); });
+  }
+  function renderLedger(){
+    const p = ranked.find(x=>x.login===selected) || ranked.find(x=>!x.error);
+    if (!p) { $("#ledger").hidden = true; return; }
+    selected = p.login; $("#ledger").hidden = false;
+    $("#ledgerTitle").textContent = `${p.name}'s species`;
+    const list = p.species.filter(s => filter==="all" || s.only)
+      .sort((a,b)=> (b.only-a.only) || (b.pts-a.pts) || a.common.localeCompare(b.common));
+    $("#species").innerHTML = list.length ? list.map(s => `
+      <a class="sp" href="https://www.inaturalist.org/taxa/${s.id}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">
+        ${s.photo ? `<img src="${esc(s.photo)}" alt="" loading="lazy">` : `<div class="ph"></div>`}
+        <div class="t"><b>${esc(s.common)}</b><i>${esc(s.sci)}</i>
+        <span class="pts">${L.fmt==="rarity"?`+${s.pts} pt${s.pts>1?"s":""}`:`${s.n} obs`}</span>${s.only?`<span class="only">Only them</span>`:""}</div></a>`).join("")
+      : `<div class="empty">${filter==="only" ? "No species that only this player has yet." : "No species in this range yet. Time to get outside."}</div>`;
+  }
+  $("#ledgerTabs").onclick = e => { const b = e.target.closest(".tab"); if(!b) return; filter = b.dataset.f;
+    $("#ledgerTabs").querySelectorAll(".tab").forEach(t=>t.setAttribute("aria-pressed", t===b)); renderLedger(); };
+
+  async function load(){
+    renderHeader();
+    if (!L.users.length) {
+      $("#notice").hidden = false;
+      $("#notice").innerHTML = `<b>Start a league.</b> Tap <b>Edit league</b>, add your friends' iNaturalist usernames, pick a format, then copy the invite link into your group chat. Everyone who opens the link sees the same live standings.`;
+      $("#board").innerHTML = ""; $("#ledger").hidden = true; return;
+    }
+    $("#notice").hidden = true;
+    $("#board").innerHTML = L.users.map(u=>`<div class="row"><div class="rank">·</div><div class="avatar"></div><div class="who"><div class="name">@${esc(u)}</div><div class="sub">Loading observations…</div></div><div></div></div>`).join("");
+    const players = [];
+    for (const u of L.users) players.push(await loadPlayer(L, u));
+    ranked = score(L, players);
+    forceRefresh = false;
+    renderBoard(); renderLedger();
+    $("#updated").textContent = new Date().toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+  }
+
+  // ---- Setup dialog ----
+  const dlg = $("#dlg"), form = $("#setup");
+  function syncDates(){ const big = form.fmt.value === "bigday"; $("#d2Wrap").hidden = big; $("#d1Label").textContent = big ? "Big Day date" : "Start date"; }
+  form.addEventListener("change", syncDates);
+  $("#editBtn").onclick = () => {
+    form.name.value = L.name || "Weekend Warriors"; form.users.value = L.users.join(", ");
+    form.fmt.value = L.fmt; form.taxon.value = L.taxon; form.d1.value = L.d1; form.d2.value = L.d2; form.rg.checked = L.rg;
+    syncDates(); dlg.showModal();
+  };
+  dlg.addEventListener("close", () => {
+    if (dlg.returnValue !== "save") return;
+    L = { name: form.name.value.trim(), users:[...new Set(form.users.value.split(/[\s,]+/).map(s=>s.replace(/^@/,"").trim().toLowerCase()).filter(Boolean))].slice(0,12),
+      fmt: form.fmt.value, taxon: form.taxon.value, d1: form.d1.value, d2: form.fmt.value==="bigday" ? form.d1.value : (form.d2.value || today), rg: form.rg.checked };
+    if (L.d2 < L.d1) [L.d1, L.d2] = [L.d2, L.d1];
+    history.replaceState(null, "", leagueUrl(L));
+    selected = null; load();
+  });
+
+  function toast(msg){ const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(()=>t.hidden=true, 2200); }
+  $("#shareBtn").onclick = async () => {
+    const url = leagueUrl(L);
+    if (navigator.share) { try { await navigator.share({title: L.name || "Field Day league", text: "Join my Field Day league", url}); return; } catch(e){ if (e.name === "AbortError") return; } }
+    try { await navigator.clipboard.writeText(url); toast("Invite link copied"); } catch(e){ prompt("Copy this link:", url); }
+  };
+  $("#refreshBtn").onclick = () => { forceRefresh = true; load(); };
+
+  load();
+})();
+</script>
+</body>
+</html>
