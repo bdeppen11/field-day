@@ -261,6 +261,27 @@ function searchBox(input, results, kind, onPick){
   document.addEventListener("click", e => { if (!results.contains(e.target) && e.target !== input) results.hidden = true; });
 }
 const cap = s => s.replace(/(^|\s)\S/g, m => m.toUpperCase());
+// Leaflet is loaded as window.L; leagues are also called L inside views, so keep our own handle.
+const LF = window.L;
+function patchMap(el, patch, onPick){
+  if (!LF) { el.hidden = true; return null; }
+  el.hidden = false;
+  const map = LF.map(el, {scrollWheelZoom:false});
+  LF.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:18, attribution:"&copy; OpenStreetMap contributors"}).addTo(map);
+  const style = {color:"#1f5b3a", weight:2, fillColor:"#2f8a57", fillOpacity:.15};
+  let circle = null, dot = null;
+  const set = p => {
+    if (circle) { circle.remove(); dot.remove(); }
+    if (!p) { map.setView([42.3, -71.8], 8); return; }
+    circle = LF.circle([p.lat, p.lng], {...style, radius:p.radius_km*1000}).addTo(map);
+    dot = LF.circleMarker([p.lat, p.lng], {radius:5, color:"#1f5b3a", fillColor:"#1f5b3a", fillOpacity:1}).addTo(map);
+    map.fitBounds(circle.getBounds(), {padding:[12,12]});
+  };
+  set(patch);
+  if (onPick) map.on("click", e => onPick(+e.latlng.lat.toFixed(4), +e.latlng.lng.toFixed(4)));
+  setTimeout(() => map.invalidateSize(), 50);
+  return {set};
+}
 
 function viewNew(){
   if (!requireAuth("new")) return;
@@ -285,8 +306,10 @@ function viewNew(){
         <b>Where <span class="hint">(optional)</span></b>
         <div class="row-wrap" id="n-where"></div>
         <div class="search"><input id="n-place" placeholder="Limit to a place: Massachusetts, Middlesex County, Acadia…" autocomplete="off"><div class="results" id="n-place-r" hidden></div></div>
-        <div class="row-wrap"><button type="button" class="btn small" id="n-patch">Use a patch around my location</button>
+        <div class="row-wrap"><button type="button" class="btn small" id="n-patch">Center on my location</button><button type="button" class="btn small" id="n-pick">Pick a spot on a map</button>
           <label style="flex-direction:row;align-items:center;gap:6px" for="n-radius">Radius<input id="n-radius" type="number" min="0.5" max="50" step="0.5" value="5" style="width:80px"> km</label></div>
+        <p class="hint" style="margin:0">A patch is one fixed circle that applies to everyone in the league.</p>
+        <div id="n-map" class="map" hidden></div><p class="hint" id="n-maphint" style="margin:0" hidden>Tap the map to move the center.</p>
       </div>
       <div class="two">
         <label for="n-d1"><span id="n-d1l">Start date</span><input id="n-d1" type="date" required value="${today()}"></label>
@@ -307,11 +330,11 @@ function viewNew(){
       + st.exclude.map((t,i)=>`<span class="chip ex">minus ${esc(t.name)}<button type="button" aria-label="Remove" data-rm="x${i}">×</button></span>`).join("")
       || `<span class="muted">All life</span>`;
     $("#n-where").innerHTML = (st.place ? `<span class="chip">${esc(st.place.name)}<button type="button" data-rm="place">×</button></span>` : "")
-      + (st.patch ? `<span class="chip">Within ${st.patch.radius_km} km of ${esc(st.patch.label)}<button type="button" data-rm="patch">×</button></span>` : "")
+      + (st.patch ? `<span class="chip">Within ${st.patch.radius_km} km of the pin<button type="button" data-rm="patch">×</button></span>` : "")
       || `<span class="muted">Anywhere</span>`;
     view.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => {
       const k = b.dataset.rm;
-      if (k==="place") st.place = null; else if (k==="patch") st.patch = null;
+      if (k==="place") st.place = null; else if (k==="patch") { st.patch = null; $("#n-map").hidden = true; $("#n-maphint").hidden = true; }
       else if (k[0]==="t") st.taxa.splice(+k.slice(1),1); else st.exclude.splice(+k.slice(1),1);
       drawChips();
     });
@@ -324,14 +347,20 @@ function viewNew(){
   searchBox($("#n-taxon"), $("#n-taxon-r"), "taxa", addTaxon);
   searchBox($("#n-place"), $("#n-place-r"), "places", p => { st.place = p; drawChips(); });
   view.querySelectorAll("[data-preset]").forEach(b => b.onclick = () => addTaxon(PRESETS.find(p=>p.id===+b.dataset.preset)));
+  let pm = null;
+  const radius = () => Math.min(50, Math.max(0.5, +$("#n-radius").value || 5));
+  const setPatch = (lat, lng) => { st.patch = {lat, lng, radius_km:radius(), label:"pin"}; showMap(); drawChips(); };
+  const showMap = () => {
+    $("#n-map").hidden = false; $("#n-maphint").hidden = false;
+    if (!pm) pm = patchMap($("#n-map"), st.patch, setPatch); else pm.set(st.patch);
+  };
   $("#n-patch").onclick = () => {
     if (!navigator.geolocation) return toast("Location isn't available in this browser");
-    navigator.geolocation.getCurrentPosition(pos => {
-      st.patch = {lat:+pos.coords.latitude.toFixed(4), lng:+pos.coords.longitude.toFixed(4), radius_km:+$("#n-radius").value || 5, label:"your spot"};
-      drawChips();
-    }, () => toast("Couldn't get your location"));
+    navigator.geolocation.getCurrentPosition(pos => setPatch(+pos.coords.latitude.toFixed(4), +pos.coords.longitude.toFixed(4)),
+      () => toast("Couldn't get your location. Pick a spot on the map instead."));
   };
-  $("#n-radius").onchange = () => { if (st.patch) { st.patch.radius_km = +$("#n-radius").value || 5; drawChips(); } };
+  $("#n-pick").onclick = () => { showMap(); toast("Tap the map to drop the center"); };
+  $("#n-radius").onchange = () => { if (st.patch) { st.patch.radius_km = radius(); pm && pm.set(st.patch); drawChips(); } };
   const sync = () => {
     const big = $("input[name=fmt]:checked").value === "bigday";
     $("#n-d2w").hidden = big; $("#n-d1l").textContent = big ? "Big Day date" : "Start date";
@@ -380,6 +409,7 @@ async function viewLeague(code){
         ${isMember && !isOwner ? `<button class="btn danger" id="l-leave" type="button">Leave</button>` : ""}
         ${isOwner ? `<button class="btn danger" id="l-delete" type="button">Delete league</button>` : ""}
       </div>
+      ${L.patch ? `<div id="l-map" class="map" aria-label="Map of the league patch"></div><p class="hint" style="margin:0">Only sightings inside the circle (${L.patch.radius_km} km) count.</p>` : ""}
       <div id="l-confirm"></div>
     </section>
     <section class="board" id="board"></section>
@@ -389,6 +419,7 @@ async function viewLeague(code){
       <div class="species" id="species"></div>
     </section>
     <p class="muted" style="font-size:12px;text-align:center">Data from <a href="https://www.inaturalist.org" target="_blank" rel="noopener">iNaturalist</a>. New sightings can take a few minutes to appear.</p>`;
+  if (L.patch) patchMap($("#l-map"), L.patch);
   if ($("#l-invite")) $("#l-invite").onclick = () => copy(invite, "Invite link copied" + (L.has_password ? " (share the password separately)" : ""));
   if ($("#l-join")) $("#l-join").onclick = async () => {
     const { error } = await sb.rpc("join_league", {p_code:L.code});
