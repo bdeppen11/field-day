@@ -207,7 +207,7 @@ async function viewMe(params){
   const box = $("#mine");
   if (error) { box.innerHTML = `<h2>Your leagues</h2><div class="err">${esc(error.message)}</div>`; return; }
   const leagues = (rows||[]).map(r=>r.league).filter(Boolean).sort((a,b)=>b.created_at.localeCompare(a.created_at));
-  box.innerHTML = `<h2>Your leagues</h2>` + (leagues.length ? leagues.map(leagueItem).join("")
+  box.innerHTML = `<h2>Your leagues</h2>` + (leagues.length ? leagues.map(l => leagueItem(l)).join("")
     : `<div class="empty">You're not in any leagues yet. <a href="#/new">Start one</a> or <a href="#/explore">find a public league</a>.</div>`);
 }
 
@@ -217,19 +217,81 @@ function whatCounts(L){
   return inc + ex;
 }
 function dateText(L){ return L.format==="bigday" ? fmtDate(L.d1) : `${fmtDate(L.d1)} – ${fmtDate(L.d2)}`; }
-function leagueItem(L){
+function leagueItem(L, km){
   return `<a class="item" href="#/l/${esc(L.code)}"><div><h3>${esc(L.name)}</h3>
     <div class="meta">${esc(FORMATS[L.format]?.label)} · ${esc(whatCounts(L))} · ${esc(dateText(L))}</div></div>
-    <span class="chip${L.visibility==="public"?"":" gold"}">${L.visibility==="public"?"Public":"Private"}</span></a>`;
+    <span class="chip${L.visibility==="public"?"":" gold"}">${km === 0 ? "You're in this area" : km != null ? (km < 10 ? km.toFixed(1) : Math.round(km)) + " km away" : L.visibility==="public"?"Public":"Private"}</span></a>`;
 }
 
+const haversine = (a, b) => { const R = 6371, r = x => x*Math.PI/180, dLat = r(b.lat-a.lat), dLng = r(b.lng-a.lng);
+  const h = Math.sin(dLat/2)**2 + Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(h)); };
+const placeCoords = new Map();
+async function fillPlaceCoords(leagues){
+  const need = [...new Set(leagues.filter(l => l.place?.id && l.place.lat == null && !placeCoords.has(l.place.id)).map(l => l.place.id))];
+  for (let i = 0; i < need.length; i += 30) {
+    try { const d = await inat("/places/" + need.slice(i, i+30).join(","), {});
+      (d.results||[]).forEach(p => placeCoords.set(p.id, latlng(p.location))); } catch(e){}
+  }
+}
+function leagueCenter(L){
+  if (L.patch?.lat != null) return {lat:L.patch.lat, lng:L.patch.lng};
+  if (L.place?.lat != null) return {lat:L.place.lat, lng:L.place.lng};
+  const c = L.place?.id && placeCoords.get(L.place.id);
+  return c && c.lat != null ? c : null;
+}
 async function viewExplore(){
-  view.innerHTML = `<section class="list"><div class="eyebrow">Explore</div><h1 style="font-size:32px">Public leagues</h1><div class="empty">Loading…</div></section>`;
-  const { data, error } = await sb.from("leagues").select("*").eq("visibility","public").gte("d2", today()).order("created_at",{ascending:false}).limit(50);
-  const box = $(".list", view);
-  box.lastElementChild.remove();
-  if (error) { box.insertAdjacentHTML("beforeend", `<div class="err">${esc(error.message)}</div>`); return; }
-  box.insertAdjacentHTML("beforeend", data.length ? data.map(leagueItem).join("") : `<div class="empty">No public leagues running right now. <a href="${session?"#/new":"#/login?next=new"}">Start the first one.</a></div>`);
+  view.innerHTML = `<section class="list"><div class="eyebrow">Explore</div><h1 style="font-size:32px">Public leagues</h1>
+    <div class="card" style="padding:14px;gap:10px">
+      <div class="two">
+        <label for="x-q">Search<input id="x-q" placeholder="League name, group or place: warblers, Boston…" autocomplete="off"></label>
+        <label for="x-fmt">Format<select id="x-fmt"><option value="">Any format</option>${Object.entries(FORMATS).map(([k,f])=>`<option value="${k}">${f.label}</option>`).join("")}</select></label>
+      </div>
+      <div class="row-wrap">
+        <button class="btn small" id="x-near" type="button">Near me</button>
+        <label style="flex-direction:row;align-items:center;gap:6px" for="x-dist">within<select id="x-dist" style="width:auto"><option value="25">25 km</option><option value="50" selected>50 km</option><option value="100">100 km</option><option value="250">250 km</option><option value="1000">1,000 km</option></select></label>
+        <label class="check" for="x-any"><input type="checkbox" id="x-any" checked> Include leagues open anywhere</label>
+        <span class="hint" id="x-status"></span>
+      </div>
+    </div>
+    <div id="x-results" class="list"><div class="empty">Loading…</div></div></section>`;
+  const { data, error } = await sb.from("leagues").select("*").eq("visibility","public").gte("d2", today()).order("created_at",{ascending:false}).limit(200);
+  const out = $("#x-results");
+  if (error) { out.innerHTML = `<div class="err">${esc(error.message)}</div>`; return; }
+  const all = data || [];
+  if (!all.length) { out.innerHTML = `<div class="empty">No public leagues running right now. <a href="${session?"#/new":"#/login?next=new"}">Start the first one.</a></div>`; return; }
+  let me = null, inside = new Set();
+  const draw = () => {
+    const q = $("#x-q").value.trim().toLowerCase(), fmt = $("#x-fmt").value, maxKm = +$("#x-dist").value, any = $("#x-any").checked;
+    let rows = all.filter(L => (!fmt || L.format === fmt) &&
+      (!q || [L.name, L.description, whatCounts(L), L.place?.name].join(" ").toLowerCase().includes(q)));
+    const withDist = rows.map(L => { const c = leagueCenter(L) || (L.place?.id && inside.has(L.place.id) ? me : null);
+      const km = !me || !c ? null : L.place?.id && inside.has(L.place.id) && !L.patch ? 0 : haversine(me, c);
+      return {L, c, km}; });
+    let html = "";
+    if (me) {
+      const near = withDist.filter(x => x.km != null && x.km <= maxKm).sort((a,b) => a.km - b.km);
+      const open = withDist.filter(x => !x.c);
+      html += `<h2 style="font-size:18px">Near you</h2>` + (near.length ? near.map(x => leagueItem(x.L, x.km)).join("") : `<div class="empty">No location-based leagues within ${maxKm} km.</div>`);
+      if (any) html += `<h2 style="font-size:18px">Open anywhere</h2>` + (open.length ? open.map(x => leagueItem(x.L)).join("") : `<div class="empty">None match.</div>`);
+    } else {
+      html = withDist.filter(x => any || x.c).map(x => leagueItem(x.L)).join("") || `<div class="empty">No leagues match your filters.</div>`;
+    }
+    out.innerHTML = html;
+  };
+  ["x-q","x-fmt","x-dist","x-any"].forEach(id => $("#"+id).addEventListener(id==="x-q" ? "input" : "change", draw));
+  $("#x-near").onclick = () => {
+    if (!navigator.geolocation) return toast("Location isn't available in this browser");
+    $("#x-status").textContent = "Finding you…";
+    navigator.geolocation.getCurrentPosition(async pos => {
+      me = {lat:pos.coords.latitude, lng:pos.coords.longitude};
+      $("#x-status").textContent = "Sorted by distance";
+      $("#x-near").classList.add("primary");
+      try { const d = 0.01, n = await inat("/places/nearby", {nelat:me.lat+d, nelng:me.lng+d, swlat:me.lat-d, swlng:me.lng-d, per_page:100});
+        [...(n.results?.standard||[]), ...(n.results?.community||[])].forEach(pl => inside.add(pl.id)); } catch(e){}
+      await fillPlaceCoords(all); draw();
+    }, () => { $("#x-status").textContent = "Couldn't get your location"; });
+  };
+  draw();
 }
 
 // Generic iNaturalist search box (taxa or places)
@@ -252,7 +314,7 @@ function searchBox(input, results, kind, onPick){
         results.hidden = false;
         results.querySelectorAll("[data-i]").forEach(b => b.onclick = () => {
           const r = rs[+b.dataset.i];
-          onPick(kind==="taxa" ? {id:r.id, name: r.preferred_common_name ? `${cap(r.preferred_common_name)}` : r.name} : {id:r.id, name:r.display_name || r.name});
+          onPick(kind==="taxa" ? {id:r.id, name: r.preferred_common_name ? `${cap(r.preferred_common_name)}` : r.name} : {id:r.id, name:r.display_name || r.name, ...latlng(r.location)});
           input.value = ""; results.hidden = true;
         });
       } catch(e){ results.innerHTML = `<div class="result err">Couldn't reach iNaturalist</div>`; results.hidden = false; }
@@ -260,6 +322,7 @@ function searchBox(input, results, kind, onPick){
   });
   document.addEventListener("click", e => { if (!results.contains(e.target) && e.target !== input) results.hidden = true; });
 }
+const latlng = loc => { const [a,b] = String(loc||"").split(",").map(Number); return isFinite(a) && isFinite(b) && loc ? {lat:a, lng:b} : {}; };
 const cap = s => s.replace(/(^|\s)\S/g, m => m.toUpperCase());
 // Leaflet is loaded as window.L; leagues are also called L inside views, so keep our own handle.
 const LF = window.L;
@@ -322,6 +385,7 @@ function viewNew(){
           <label class="opt"><input type="radio" name="vis" value="private" checked><span>Private<small>Join by invite link</small></span></label>
           <label class="opt"><input type="radio" name="vis" value="public"><span>Public<small>Listed on Explore; anyone can join</small></span></label>
         </div></div>
+      <label for="n-max">Member limit <span class="hint">Leave blank for no limit</span><input id="n-max" type="number" min="2" max="10000" step="1" placeholder="No limit" style="max-width:180px"></label>
       <label for="n-pass" id="n-passw">Password <span class="hint">Optional extra lock for private leagues</span><input id="n-pass" type="text" autocomplete="off" maxlength="40"></label>
       <div class="err" id="n-err" hidden></div>
       <button class="btn primary" type="submit">Create league</button>
@@ -377,7 +441,7 @@ function viewNew(){
     const { data, error } = await sb.rpc("create_league", {
       p_name:$("#n-name").value.trim(), p_description:$("#n-desc").value.trim(), p_visibility:vis,
       p_password: vis==="private" ? $("#n-pass").value : "", p_format:fmt, p_taxa:st.taxa, p_exclude_taxa:st.exclude,
-      p_place:st.place, p_patch:st.patch, p_d1:d1, p_d2:d2, p_research_grade:$("#n-rg").checked });
+      p_place:st.place, p_patch:st.patch, p_d1:d1, p_d2:d2, p_research_grade:$("#n-rg").checked, p_max_members: +$("#n-max").value >= 2 ? Math.floor(+$("#n-max").value) : null });
     if (error) { err.textContent = error.message; err.hidden = false; return; }
     toast("League created"); location.hash = "#/l/" + data.code;
   };
@@ -402,6 +466,7 @@ async function viewLeague(code){
         ${L.place ? `<span class="chip">${esc(L.place.name)}</span>` : ""}${L.patch ? `<span class="chip">Within ${L.patch.radius_km} km patch</span>` : ""}
         ${L.research_grade ? `<span class="chip gold">Research grade</span>` : ""}
         <span class="chip${L.visibility==="public"?"":" gold"}">${L.visibility==="public"?"Public":"Private"}${L.has_password?" · password":""}</span>
+        <span class="chip">${members.length}${L.max_members ? " / " + L.max_members : ""} member${members.length===1&&!L.max_members?"":"s"}</span>
       </div>
       <div class="row-wrap">
         ${isMember ? `<button class="btn primary" id="l-invite" type="button">Copy invite link</button>` : session
@@ -493,6 +558,7 @@ async function viewEdit(code){
           <label class="opt"><input type="radio" name="evis" value="private" ${L.visibility==="private"?"checked":""}><span>Private<small>Join by invite link</small></span></label>
           <label class="opt"><input type="radio" name="evis" value="public" ${L.visibility==="public"?"checked":""}><span>Public<small>Listed on Explore; anyone can join</small></span></label>
         </div></div>
+      <label for="e-max">Member limit <span class="hint">Leave blank for no limit. Currently ${(mem||[]).length} member${(mem||[]).length===1?"":"s"}.</span><input id="e-max" type="number" min="2" max="10000" step="1" placeholder="No limit" value="${L.max_members ?? ""}" style="max-width:180px"></label>
       <div class="card" style="padding:14px;gap:10px">
         <b>Password</b>
         <p class="hint" style="margin:0">${L.has_password ? "This league has a password. Members who already joined aren't affected by changes." : "No password. Anyone with the invite link can join."}</p>
@@ -522,7 +588,7 @@ async function viewEdit(code){
   $("#eForm").onsubmit = async e => {
     e.preventDefault();
     const err = $("#e-err"); err.hidden = true;
-    const { error } = await sb.rpc("update_league_info", {p_id:L.id, p_name:$("#e-name").value.trim(), p_description:$("#e-desc").value.trim(), p_visibility:$("input[name=evis]:checked").value});
+    const { error } = await sb.rpc("update_league_info", {p_id:L.id, p_name:$("#e-name").value.trim(), p_description:$("#e-desc").value.trim(), p_visibility:$("input[name=evis]:checked").value, p_max_members: +$("#e-max").value >= 2 ? Math.floor(+$("#e-max").value) : null});
     if (error) { err.textContent = error.message; err.hidden = false; return; }
     const remove = $("#e-nopass") && $("#e-nopass").checked, pw = $("#e-pass").value;
     if (remove || pw) {
@@ -540,7 +606,8 @@ async function viewJoin(code){
   view.innerHTML = `<div class="card" style="max-width:520px;width:100%;margin:24px auto 0">
     <div class="eyebrow">You're invited</div><h1 style="font-size:30px">${esc(L.name)}</h1>
     ${L.description?`<p class="muted" style="margin:0">${esc(L.description)}</p>`:""}
-    <div class="row-wrap"><span class="chip">${esc(FORMATS[L.format]?.label)}</span><span class="chip">${esc(whatCounts(L))}</span><span class="chip">${esc(dateText(L))}</span><span class="chip">${L.member_count} member${L.member_count==1?"":"s"}</span></div>
+    <div class="row-wrap"><span class="chip">${esc(FORMATS[L.format]?.label)}</span><span class="chip">${esc(whatCounts(L))}</span><span class="chip">${esc(dateText(L))}</span><span class="chip">${L.member_count}${L.max_members ? " / " + L.max_members : ""} member${L.member_count==1&&!L.max_members?"":"s"}</span></div>
+    ${L.max_members && L.member_count >= L.max_members ? `<p class="err" style="margin:0">This league is full.</p>` : ""}
     ${session ? `<form id="jForm">${L.has_password?`<label for="j-pass">League password<input id="j-pass" required autocomplete="off"></label>`:""}
       <div class="err" id="j-err" hidden></div><button class="btn primary" type="submit">Join league</button></form>`
       : `<a class="btn primary" href="#/login?next=${encodeURIComponent("l/"+code)}">Sign in to join</a>`}
