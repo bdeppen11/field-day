@@ -455,7 +455,7 @@ async function viewLeague(code){
   const members = (mem||[]).map(m => ({user_id:m.user_id, display_name:m.profile?.display_name, inat_login:m.profile?.inat_login}));
   const isMember = session && members.some(m=>m.user_id===session.user.id);
   const isOwner = session && L.owner_id === session.user.id;
-  const invite = location.origin + location.pathname + "#/l/" + L.code;
+  const invite = location.origin + "/l/" + L.code;
   view.innerHTML = `
     <section class="lhead">
       <div class="eyebrow">${esc(FORMATS[L.format].label)}</div>
@@ -640,6 +640,8 @@ async function route(){
     else viewHome();
   } catch(e){ view.innerHTML = `<div class="card"><h2>Something went wrong</h2><p class="err">${esc(errMsg(e))}</p></div>`; }
 }
+// Real league URLs (/l/CODE) exist for link previews; inside the app we use hash routes.
+{ const m = location.pathname.match(/^\/l\/([a-z0-9]+)\/?$/i); if (m) history.replaceState(null, "", "/#/l/" + m[1].toLowerCase()); }
 window.addEventListener("hashchange", route);
 (async () => {
   if (sb) {
