@@ -408,7 +408,7 @@ async function viewLeague(code){
           ? `<button class="btn primary" id="l-join" type="button">Join league</button>` : `<a class="btn primary" href="#/login?next=${encodeURIComponent("l/"+L.code)}">Sign in to join</a>`}
         <button class="btn" id="l-refresh" type="button">Refresh</button>
         ${isMember && !isOwner ? `<button class="btn danger" id="l-leave" type="button">Leave</button>` : ""}
-        ${isOwner ? `<button class="btn danger" id="l-delete" type="button">Delete league</button>` : ""}
+        ${isOwner ? `<a class="btn" href="#/l/${esc(L.code)}/edit">Edit league</a><button class="btn danger" id="l-delete" type="button">Delete league</button>` : ""}
       </div>
       ${L.patch ? `<div id="l-map" class="map" aria-label="Map of the league patch"></div><p class="hint" style="margin:0">Only sightings inside the circle (${L.patch.radius_km} km) count.</p>` : ""}
       <div id="l-confirm"></div>
@@ -474,6 +474,65 @@ async function viewLeague(code){
   load(false);
 }
 
+async function viewEdit(code){
+  if (!requireAuth("l/" + code + "/edit")) return;
+  view.innerHTML = `<div class="empty">Loading…</div>`;
+  const { data: L } = await sb.from("leagues").select("*").eq("code", code).maybeSingle();
+  if (!L || L.owner_id !== session.user.id) {
+    view.innerHTML = `<div class="card"><h2>Only the league owner can edit this league</h2><p><a href="#/l/${esc(code)}">Back to the league</a></p></div>`; return;
+  }
+  const { data: mem } = await sb.from("league_members").select("user_id, profile:profiles(display_name, inat_login)").eq("league_id", L.id);
+  const others = (mem||[]).filter(m => m.user_id !== L.owner_id);
+  view.innerHTML = `<div class="card">
+    <div class="eyebrow">Edit league</div><h1 style="font-size:30px">${esc(L.name)}</h1>
+    <form id="eForm">
+      <label for="e-name">League name<input id="e-name" maxlength="60" required value="${esc(L.name)}"></label>
+      <label for="e-desc">Description<textarea id="e-desc" maxlength="280">${esc(L.description)}</textarea></label>
+      <div><div class="hint" style="font-weight:600;font-size:13px;margin-bottom:6px">Who can join</div>
+        <div class="opts">
+          <label class="opt"><input type="radio" name="evis" value="private" ${L.visibility==="private"?"checked":""}><span>Private<small>Join by invite link</small></span></label>
+          <label class="opt"><input type="radio" name="evis" value="public" ${L.visibility==="public"?"checked":""}><span>Public<small>Listed on Explore; anyone can join</small></span></label>
+        </div></div>
+      <div class="card" style="padding:14px;gap:10px">
+        <b>Password</b>
+        <p class="hint" style="margin:0">${L.has_password ? "This league has a password. Members who already joined aren't affected by changes." : "No password. Anyone with the invite link can join."}</p>
+        <label for="e-pass">${L.has_password ? "New password" : "Add a password"} <span class="hint">Leave blank to keep as is</span><input id="e-pass" type="text" autocomplete="off" maxlength="40"></label>
+        ${L.has_password ? `<label class="check" for="e-nopass"><input type="checkbox" id="e-nopass"> Remove the password</label>` : ""}
+      </div>
+      <div class="err" id="e-err" hidden></div>
+      <div class="row-wrap"><button class="btn primary" type="submit">Save changes</button><a class="btn" href="#/l/${esc(code)}">Cancel</a></div>
+    </form>
+    <p class="hint" style="margin:0">Format, dates, what counts and location are locked once a league starts, so the rules stay fair for everyone.</p>
+  </div>
+  <section class="card"><h2 style="font-size:20px">Members</h2><div class="list" id="e-members">
+    ${others.length ? others.map(m => `<div class="item" style="padding:10px 14px"><div><b>${esc(m.profile?.display_name || "Player")}</b><div class="meta">${m.profile?.inat_login ? "@" + esc(m.profile.inat_login) : "No iNaturalist username yet"}</div></div>
+      <span class="row-wrap" data-u="${esc(m.user_id)}"><button class="btn small danger" type="button" data-rm>Remove</button></span></div>`).join("")
+      : `<div class="empty">No other members yet.</div>`}
+  </div></section>`;
+  $("#e-members").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => {
+    const box = b.parentElement;
+    box.innerHTML = `<span class="muted" style="font-size:13px">Remove?</span><button class="btn small danger" type="button" data-yes>Remove</button><button class="btn small" type="button" data-no>Cancel</button>`;
+    box.querySelector("[data-no]").onclick = () => viewEdit(code);
+    box.querySelector("[data-yes]").onclick = async () => {
+      const { error } = await sb.rpc("remove_member", {p_league:L.id, p_user:box.dataset.u});
+      if (error) return toast(error.message);
+      toast("Member removed"); viewEdit(code);
+    };
+  });
+  $("#eForm").onsubmit = async e => {
+    e.preventDefault();
+    const err = $("#e-err"); err.hidden = true;
+    const { error } = await sb.rpc("update_league_info", {p_id:L.id, p_name:$("#e-name").value.trim(), p_description:$("#e-desc").value.trim(), p_visibility:$("input[name=evis]:checked").value});
+    if (error) { err.textContent = error.message; err.hidden = false; return; }
+    const remove = $("#e-nopass") && $("#e-nopass").checked, pw = $("#e-pass").value;
+    if (remove || pw) {
+      const { error: pe } = await sb.rpc("set_league_password", {p_id:L.id, p_password: remove ? "" : pw});
+      if (pe) { err.textContent = pe.message; err.hidden = false; return; }
+    }
+    toast("League updated"); location.hash = "#/l/" + code;
+  };
+}
+
 async function viewJoin(code){
   const { data } = await sb.rpc("league_by_code", {p_code:code});
   const L = data && data[0];
@@ -509,6 +568,7 @@ async function route(){
     else if (parts[0]==="me") await viewMe(params);
     else if (parts[0]==="explore") await viewExplore();
     else if (parts[0]==="new") viewNew();
+    else if (parts[0]==="l" && parts[1] && parts[2]==="edit") await viewEdit(parts[1].toLowerCase());
     else if (parts[0]==="l" && parts[1]) await viewLeague(parts[1].toLowerCase());
     else viewHome();
   } catch(e){ view.innerHTML = `<div class="card"><h2>Something went wrong</h2><p class="err">${esc(errMsg(e))}</p></div>`; }
