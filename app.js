@@ -273,6 +273,7 @@ function patchMap(el, patch, onPick){
   const set = p => {
     if (circle) { circle.remove(); dot.remove(); }
     if (!p) { map.setView([42.3, -71.8], 8); return; }
+    map.setView([p.lat, p.lng], 12);
     circle = LF.circle([p.lat, p.lng], {...style, radius:p.radius_km*1000}).addTo(map);
     dot = LF.circleMarker([p.lat, p.lng], {radius:5, color:"#1f5b3a", fillColor:"#1f5b3a", fillOpacity:1}).addTo(map);
     map.fitBounds(circle.getBounds(), {padding:[12,12]});
